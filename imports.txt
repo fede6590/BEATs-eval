@@ -5,7 +5,6 @@ pandas as pd
 os
 sox
 soundfile
-requests
 logging
 math
 typing
