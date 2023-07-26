@@ -7,6 +7,15 @@
 # https://github.com/pytorch/fairseq
 # --------------------------------------------------------
 
+# IMPORTANT FOR FINE-TUNING ###########################
+# TO SOLVE this RuntimeError: 
+# one of the variables needed for gradient computation 
+# has been modified by an inplace operation: 
+# [torch.cuda.FloatTensor [32, 768, 248]]
+# ACTIVATE 115 over 114 => ADDING DETACH TO THE 1D CONV
+#######################################################
+
+
 import math
 import numpy as np
 from typing import Dict, Optional, Tuple
@@ -14,7 +23,7 @@ import torch
 from torch import Tensor, nn
 import torch.nn.functional as F
 from torch.nn import LayerNorm, Parameter
-from modules import (
+from scripts.modules import (
     GradMultiply,
     SamePad,
     get_activation_fn,
@@ -112,6 +121,7 @@ class TransformerEncoder(nn.Module):
             x[padding_mask] = 0
 
         x_conv = self.pos_conv(x.transpose(1, 2))
+        # x_conv = self.pos_conv(x.transpose(1, 2)).detach()
         x_conv = x_conv.transpose(1, 2)
         x = x + x_conv
 

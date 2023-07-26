@@ -2,7 +2,6 @@ import torchaudio
 
 
 def resample_audio(input_path, target_sr=16000):
-
     # Set audiobackend to soundfile (catched torchaudio error)
     torchaudio.set_audio_backend("soundfile")
     # Load audio file from input_path

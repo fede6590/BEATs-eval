@@ -13,11 +13,8 @@ import torch.nn as nn
 from torch.nn import LayerNorm
 import torchaudio.compliance.kaldi as ta_kaldi
 
-from backbone import (
+from scripts.backbone import (
     TransformerEncoder,
-)
-from quantizer import (
-    NormEMAVectorQuantizer,
 )
 
 import logging
@@ -26,7 +23,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
-class TokenizersConfig:
+class BEATsConfig:
     def __init__(self, cfg=None):
         self.input_patch_size: int = -1  # path size of patch embedding
         self.embed_dim: int = 512  # patch embedding dimension
@@ -38,6 +35,7 @@ class TokenizersConfig:
         self.encoder_attention_heads: int = 12  # num encoder attention heads
         self.activation_fn: str = "gelu"  # activation function to use
 
+        self.layer_wise_gradient_decay_ratio: float = 1.0  # ratio for layer-wise gradient decay
         self.layer_norm_first: bool = False  # apply layernorm first in the transformer
         self.deep_norm: bool = False  # apply deep_norm first in the transformer
 
@@ -58,9 +56,10 @@ class TokenizersConfig:
         self.max_distance: int = 1280  # maximum distance for relative position embedding
         self.gru_rel_pos: bool = False  # apply gated relative position embedding
 
-        # quantizer
-        self.quant_n: int = 1024 # codebook number in quantizer
-        self.quant_dim: int = 256    # codebook dimension in quantizer
+        # label predictor
+        self.finetuned_model: bool = False  # whether the model is a fine-tuned model.
+        self.predictor_dropout: float = 0.1  # dropout probability for the predictor
+        self.predictor_class: int = 527  # target class number for the predictor
 
         if cfg is not None:
             self.update(cfg)
@@ -69,13 +68,13 @@ class TokenizersConfig:
         self.__dict__.update(cfg)
 
 
-class Tokenizers(nn.Module):
+class BEATs(nn.Module):
     def __init__(
             self,
-            cfg: TokenizersConfig,
+            cfg: BEATsConfig,
     ) -> None:
         super().__init__()
-        logger.info(f"Tokenizers Config: {cfg.__dict__}")
+        logger.info(f"BEATs Config: {cfg.__dict__}")
 
         self.cfg = cfg
 
@@ -96,15 +95,11 @@ class Tokenizers(nn.Module):
         self.encoder = TransformerEncoder(cfg)
         self.layer_norm = LayerNorm(self.embed)
 
-        self.quantize = NormEMAVectorQuantizer(
-            n_embed=cfg.quant_n, embedding_dim=cfg.quant_dim, beta=1.0, kmeans_init=True, decay=0.99,
-        )
-        self.quant_n = cfg.quant_n
-        self.quantize_layer = nn.Sequential(
-            nn.Linear(cfg.encoder_embed_dim, cfg.encoder_embed_dim),
-            nn.Tanh(),
-            nn.Linear(cfg.encoder_embed_dim, cfg.quant_dim)  # for quantize
-        )
+        if cfg.finetuned_model:
+            self.predictor_dropout = nn.Dropout(cfg.predictor_dropout)
+            self.predictor = nn.Linear(cfg.encoder_embed_dim, cfg.predictor_class)
+        else:
+            self.predictor = None
 
     def forward_padding_mask(
             self,
@@ -135,7 +130,7 @@ class Tokenizers(nn.Module):
         fbank = (fbank - fbank_mean) / (2 * fbank_std)
         return fbank
 
-    def extract_labels(
+    def extract_features(
             self,
             source: torch.Tensor,
             padding_mask: Optional[torch.Tensor] = None,
@@ -166,8 +161,19 @@ class Tokenizers(nn.Module):
             padding_mask=padding_mask,
         )
 
-        quantize_input = self.quantize_layer(x)
-        quantize_feature, embed_loss, embed_ind = self.quantize(quantize_input)
+        if self.predictor is not None:
+            x = self.predictor_dropout(x)
+            logits = self.predictor(x)
 
-        return embed_ind
+            if padding_mask is not None and padding_mask.any():
+                logits[padding_mask] = 0
+                logits = logits.sum(dim=1)
+                logits = logits / (~padding_mask).sum(dim=1).unsqueeze(-1).expand_as(logits)
+            else:
+                logits = logits.mean(dim=1)
 
+            lprobs = torch.sigmoid(logits)
+
+            return lprobs, padding_mask
+        else:
+            return x, padding_mask
