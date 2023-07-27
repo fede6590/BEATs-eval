@@ -23,7 +23,7 @@ def model_fn(model_dir):
     print(f"Executing model_fn from inference.py {model_dir} …")
     # Prueba
     env = os.environ
-    model_name_1 = f"/opt/ml/model/code/{env['MODEL_NAME']}"
+    model_name_1 = f"/opt/ml/model/{env['MODEL_NAME']}"
     print(f'prueba nombre: {model_name_1}')
     
     try:
